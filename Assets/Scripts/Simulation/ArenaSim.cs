@@ -290,7 +290,13 @@ namespace GotA.Simulation
             {
                 SimUnit u = _units[i];
                 u.Velocity = u.Velocity * _dragFactor;
-                u.Position = u.Position + u.Velocity * dt;
+                SimVec2 step = u.Velocity * dt;
+                u.Position = u.Position + step;
+
+                // P-06 telemetry only: AI never sets velocity during Stagger or above MoveSpeed,
+                // so movement in those cases (or by a dead, sliding unit) is knockback.
+                if (!u.IsAlive || u.StaggerTimer > 0f || u.Velocity.Magnitude > u.MoveSpeed)
+                    u.KnockbackDistance += step.Magnitude;
             }
 
             ResolveCollisions();

@@ -74,6 +74,7 @@ namespace GotA.Simulation
             int actualDamage = Math.Min(finalDamage, defender.HP);
             defender.HP -= actualDamage;
             defender.LastAttackerId = attacker.UnitId;
+            defender.HitsTaken++; // P-06 telemetry
 
             // 7. Lifesteal: only if A.HP > 0
             int heal = 0;

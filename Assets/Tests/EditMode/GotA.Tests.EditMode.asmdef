@@ -4,6 +4,7 @@
     "references": [
         "GotA.Simulation",
         "GotA.Client",
+        "GotA.Editor",
         "UnityEngine.TestRunner",
         "UnityEditor.TestRunner"
     ],

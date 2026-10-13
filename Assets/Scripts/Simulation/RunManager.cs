@@ -97,6 +97,15 @@ namespace GotA.Simulation
 
         public IReadOnlyList<WaveResult> WaveResults => _results;
 
+        /// <summary>P-06 telemetry: knockback displacement of all units over all finished waves.</summary>
+        public float TotalPushDistance { get; private set; }
+
+        /// <summary>P-06 telemetry: hits landed (either team) over all finished waves.</summary>
+        public int TotalHits { get; private set; }
+
+        /// <summary>P-06 telemetry: TotalPushDistance / TotalHits, 0 when nothing was hit.</summary>
+        public float AveragePushDistance => TotalHits > 0 ? TotalPushDistance / TotalHits : 0f;
+
         /// <summary>Begins the run: Wave 1, fighter at MaxHP.</summary>
         public void Start()
         {
@@ -166,6 +175,12 @@ namespace GotA.Simulation
         {
             SimUnit fighter = _sim.GetUnit(_config.FighterUnitId);
             _fighterHp = Math.Max(0, fighter.HP);
+
+            for (int i = 0; i < _sim.Units.Count; i++)
+            {
+                TotalPushDistance += _sim.Units[i].KnockbackDistance;
+                TotalHits += _sim.Units[i].HitsTaken;
+            }
 
             switch (outcome)
             {
