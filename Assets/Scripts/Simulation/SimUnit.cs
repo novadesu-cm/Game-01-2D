@@ -58,18 +58,6 @@ namespace GotA.Simulation
         /// <summary>UnitId of the last attacker that hit this unit (0 = none).</summary>
         public int LastAttackerId;
 
-        // --- P-06 telemetry (read-only for gameplay; never influences the simulation) ---
-
-        /// <summary>Hits this unit has received (HitResolver increments it).</summary>
-        public int HitsTaken { get; internal set; }
-
-        /// <summary>
-        /// Distance travelled while knocked back (Stagger active, faster than MoveSpeed, or dead and sliding).
-        /// Accumulated by ArenaSim.PhysicsStep from the velocity step, so it is the real displacement
-        /// before collision correction.
-        /// </summary>
-        public float KnockbackDistance { get; internal set; }
-
         // --- P-03 AI data ---
         public float MoveSpeed;
         public float AtkSpdMult = 1f;

@@ -19,38 +19,56 @@ namespace GotA.Client
         }
     }
 
-    /// <summary>Everything P-06 logs for one finished run (one CSV row).</summary>
+    /// <summary>One per-hit CSV row (D-08 knockback distance; target-died flag).</summary>
+    public readonly struct HitRow
+    {
+        public readonly int Tick;
+        public readonly int AttackerId;
+        public readonly int TargetId;
+        public readonly string Weapon;       // attacker's weapon; "Enemy" for enemies
+        public readonly int Damage;
+        public readonly float KbDistance;
+        public readonly HitTargetDeath TargetDied;
+
+        public HitRow(int tick, int attackerId, int targetId, string weapon, int damage,
+                      float kbDistance, HitTargetDeath targetDied)
+        {
+            Tick = tick;
+            AttackerId = attackerId;
+            TargetId = targetId;
+            Weapon = weapon;
+            Damage = damage;
+            KbDistance = kbDistance;
+            TargetDied = targetDied;
+        }
+    }
+
+    /// <summary>Everything P-06 logs for one finished run: one run row, N hit rows, N decision rows.</summary>
     public sealed class RunLogRecord
     {
         public int Seed;
         public string Weapon;
         public string Trait;
         public RunEndReason Reason;
-        public int WavesCleared;
-        public int WaveReached;
         public int FinalPot;
         public int BestPot;
         public int TotalTicks;
         public float DurationSeconds;
 
-        public List<DecisionRecord> Decisions = new List<DecisionRecord>();
-
-        /// <summary>1. Total seconds the player spent on Extract/Continue screens.</summary>
-        public float DecisionSecondsTotal;
-
-        /// <summary>2. Continue choices / decisions. NaN when the run had no decision (died in Wave 1).</summary>
-        public float ContinueRate;
-
-        /// <summary>3. One-line cause (ring-out / HP + last attacker, extract, timeout, clear).</summary>
-        public string CauseOfDeath;
-
-        /// <summary>4. Total knockback displacement / hits landed (units of arena length).</summary>
-        public float AveragePushDistance;
-        public float TotalPushDistance;
-        public int TotalHits;
-
         /// <summary>Per-wave outcome list, e.g. "W1:Cleared;W2:Defeat".</summary>
         public string WaveResults;
+
+        /// <summary>Fighter death: None when the Fighter survived the run.</summary>
+        public HitTargetDeath FighterDeath;
+
+        /// <summary>UnitID of the last attacker that hit the Fighter (0 = none). Only meaningful with FighterDeath != None.</summary>
+        public int LastAttackerId;
+
+        /// <summary>Enemies that ring-outed within a window of a Fighter hit, each counted once (G1b, Fighter hits only).</summary>
+        public int FighterRingOuts;
+
+        public List<DecisionRecord> Decisions = new List<DecisionRecord>();
+        public List<HitRow> Hits = new List<HitRow>();
     }
 
     /// <summary>
@@ -101,19 +119,36 @@ namespace GotA.Client
             if (run.State != RunState.Ended)
                 throw new InvalidOperationException("Run has not ended.");
 
-            float decisionTotal = 0f;
-            int continues = 0;
-            for (int i = 0; i < _decisions.Count; i++)
-            {
-                decisionTotal += _decisions[i].Seconds;
-                if (_decisions[i].Continued) continues++;
-            }
-
             var waves = new List<string>();
             for (int i = 0; i < run.WaveResults.Count; i++)
             {
                 WaveResult r = run.WaveResults[i];
                 waves.Add("W" + r.WaveNumber + ":" + r.Outcome);
+            }
+
+            int fighterId = run.Config.FighterUnitId;
+
+            // Rows are logged for both teams; G1/G1b filter on the attacker UnitID (Fighter = 1).
+            var hits = new List<HitRow>(run.HitLog.Count);
+            var ringOutVictims = new HashSet<long>();
+            for (int i = 0; i < run.HitLog.Count; i++)
+            {
+                HitLogEntry e = run.HitLog[i];
+                bool byFighter = e.AttackerId == fighterId;
+                hits.Add(new HitRow(e.RunTick, e.AttackerId, e.TargetId, byFighter ? Weapon : "Enemy",
+                                    e.Damage, e.KbDistance, e.TargetDied));
+
+                if (byFighter && e.TargetDied == HitTargetDeath.RingOut)
+                    ringOutVictims.Add(((long)e.WaveNumber << 32) | (uint)e.TargetId); // one per enemy, however many hits
+            }
+
+            HitTargetDeath fighterDeath = HitTargetDeath.None;
+            int lastAttacker = 0;
+            SimUnit fighter = run.Sim?.GetUnit(fighterId);
+            if (fighter != null && !fighter.IsAlive)
+            {
+                fighterDeath = fighter.DeathCause == DeathCause.RingOut ? HitTargetDeath.RingOut : HitTargetDeath.HP;
+                lastAttacker = fighter.LastAttackerId;
             }
 
             return new RunLogRecord
@@ -122,20 +157,16 @@ namespace GotA.Client
                 Weapon = Weapon,
                 Trait = Trait,
                 Reason = run.EndReason,
-                WavesCleared = summary.WavesCleared,
-                WaveReached = summary.WaveReached,
                 FinalPot = summary.FinalPot,
                 BestPot = bestPot,
                 TotalTicks = run.TotalTicks,
                 DurationSeconds = run.TotalTicks * run.Config.Arena.FixedDt,
+                WaveResults = string.Join(";", waves),
+                FighterDeath = fighterDeath,
+                LastAttackerId = lastAttacker,
+                FighterRingOuts = ringOutVictims.Count,
                 Decisions = new List<DecisionRecord>(_decisions),
-                DecisionSecondsTotal = decisionTotal,
-                ContinueRate = _decisions.Count > 0 ? (float)continues / _decisions.Count : float.NaN,
-                CauseOfDeath = summary.CauseLine ?? string.Empty,
-                AveragePushDistance = run.AveragePushDistance,
-                TotalPushDistance = run.TotalPushDistance,
-                TotalHits = run.TotalHits,
-                WaveResults = string.Join(";", waves)
+                Hits = hits
             };
         }
     }

@@ -25,6 +25,13 @@ namespace GotA.Simulation
         private readonly float _dragFactor;
         private readonly List<SimUnit> _units = new List<SimUnit>(); // always sorted by UnitId
 
+        /// <summary>D-08: length of the knockback measurement window of one hit, in ticks.</summary>
+        public const int KbWindowTicks = 50;
+
+        // P-06 / D-08 measurement only: never read by gameplay code.
+        private readonly List<KbRecord> _openKb = new List<KbRecord>();
+        private readonly List<HitLogEntry> _hitLog = new List<HitLogEntry>();
+
         public ArenaSim(ArenaConfig config, HitRules hitRules = null, AiRules aiRules = null)
         {
             if (config == null) throw new ArgumentNullException(nameof(config));
@@ -55,6 +62,15 @@ namespace GotA.Simulation
 
         /// <summary>Units in ascending UnitId order.</summary>
         public IReadOnlyList<SimUnit> Units => _units;
+
+        /// <summary>
+        /// P-06: when false no per-hit measurement is made (hit log stays empty).
+        /// The simulation result is identical either way.
+        /// </summary>
+        public bool MeasureKnockback { get; set; } = true;
+
+        /// <summary>Per-hit records whose window has ended, in the order the windows closed.</summary>
+        public IReadOnlyList<HitLogEntry> HitLog => _hitLog;
 
         public SimUnit AddUnit(int unitId, int team, SimVec2 position, float bodyRadius)
         {
@@ -149,6 +165,8 @@ namespace GotA.Simulation
                 if (CheckOutcome())                           // 5
                 {
                     TickCount++;
+                    StepKbMeasurement(false);                 // P-06 measurement only
+                    FinishKbMeasurement();
                     return;                                   // physics off on the outcome tick
                 }
 
@@ -158,6 +176,96 @@ namespace GotA.Simulation
 
             PhysicsStep();                                    // 7
             TickCount++;
+            StepKbMeasurement(true);                          // P-06 measurement only
+        }
+
+        // ------------------------------------------------------------------
+        // P-06 / D-08 knockback measurement. Reads unit alive/death state, never
+        // writes any simulation state; KbVel is separate from Position/Velocity.
+        // ------------------------------------------------------------------
+
+        /// <summary>Called by HitResolver after a hit resolved (step 8 impulse and direction known).</summary>
+        internal void NotifyHit(SimUnit attacker, SimUnit target, int actualDamage, SimVec2 dir, float impulse)
+        {
+            if (!MeasureKnockback) return;
+
+            var entry = new HitLogEntry
+            {
+                WaveTick = TickCount + 1,
+                RunTick = TickCount + 1,
+                AttackerId = attacker.UnitId,
+                TargetId = target.UnitId,
+                Damage = actualDamage,
+                TargetDied = HitTargetDeath.None
+            };
+
+            // A killing hit (HP 0) is marked dead in step 4 of this same tick: it closes with distance 0.
+            _openKb.Add(new KbRecord
+            {
+                Entry = entry,
+                Target = target,
+                KbVel = target.HP > 0 ? dir * impulse : SimVec2.Zero
+            });
+        }
+
+        /// <summary>
+        /// End of every tick: close windows of dead targets (cause HP / RingOut), otherwise advance
+        /// KbVel by one drag step (only on ticks where physics ran) and close after KbWindowTicks.
+        /// </summary>
+        private void StepKbMeasurement(bool physicsRan)
+        {
+            if (_openKb.Count == 0) return;
+
+            float dt = _config.FixedDt;
+            int write = 0;
+            for (int i = 0; i < _openKb.Count; i++)
+            {
+                KbRecord r = _openKb[i];
+
+                if (!r.Target.IsAlive)
+                {
+                    r.Entry.TargetDied = r.Target.DeathCause == DeathCause.RingOut
+                        ? HitTargetDeath.RingOut : HitTargetDeath.HP;
+                    _hitLog.Add(r.Entry);
+                    continue;
+                }
+
+                if (physicsRan)
+                {
+                    r.KbVel = r.KbVel * _dragFactor;
+                    r.Entry.KbDistance += r.KbVel.Magnitude * dt;
+                    r.TicksDone++;
+                    if (r.TicksDone >= KbWindowTicks)
+                    {
+                        _hitLog.Add(r.Entry);
+                        continue;
+                    }
+                }
+
+                _openKb[write++] = r;
+            }
+            _openKb.RemoveRange(write, _openKb.Count - write);
+        }
+
+        /// <summary>
+        /// The wave ended (outcome): physics is off, so the remaining window ticks are completed
+        /// analytically on KbVel alone, for targets still alive. The measurement stays the pure D-08 value.
+        /// </summary>
+        private void FinishKbMeasurement()
+        {
+            float dt = _config.FixedDt;
+            for (int i = 0; i < _openKb.Count; i++)
+            {
+                KbRecord r = _openKb[i];
+                while (r.TicksDone < KbWindowTicks)
+                {
+                    r.KbVel = r.KbVel * _dragFactor;
+                    r.Entry.KbDistance += r.KbVel.Magnitude * dt;
+                    r.TicksDone++;
+                }
+                _hitLog.Add(r.Entry);
+            }
+            _openKb.Clear();
         }
 
         private static float Decay(float timer, float dt)
@@ -292,11 +400,6 @@ namespace GotA.Simulation
                 u.Velocity = u.Velocity * _dragFactor;
                 SimVec2 step = u.Velocity * dt;
                 u.Position = u.Position + step;
-
-                // P-06 telemetry only: AI never sets velocity during Stagger or above MoveSpeed,
-                // so movement in those cases (or by a dead, sliding unit) is knockback.
-                if (!u.IsAlive || u.StaggerTimer > 0f || u.Velocity.Magnitude > u.MoveSpeed)
-                    u.KnockbackDistance += step.Magnitude;
             }
 
             ResolveCollisions();

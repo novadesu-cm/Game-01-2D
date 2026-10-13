@@ -193,20 +193,29 @@ namespace GotA.EditorTools
 
             try
             {
-                // Share-read so the log can be analysed while the game is still running.
-                string[] lines;
-                using (var fs = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-                using (var reader = new StreamReader(fs))
-                {
-                    string text = reader.ReadToEnd();
-                    lines = text.Split('\n');
-                }
-                _report = GateAnalyzer.Analyze(lines, ReadManual(), _path);
+                // hit_log.csv and decision_log.csv sit next to the run log.
+                string dir = Path.GetDirectoryName(_path) ?? string.Empty;
+                string[] runLines = ReadLines(_path);
+                string[] hitLines = ReadLines(Path.Combine(dir, "hit_log.csv"));
+                string[] decisionLines = ReadLines(Path.Combine(dir, "decision_log.csv"));
+                if (hitLines == null) _error = "hit_log.csv not found next to the run log: G1 has no data.";
+                else if (decisionLines == null) _error = "decision_log.csv not found next to the run log: G3/G4 have no decision data.";
+
+                _report = GateAnalyzer.Analyze(runLines, ReadManual(), _path, hitLines, decisionLines);
             }
             catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
             {
                 _error = "Could not read " + _path + ": " + e.Message;
             }
+        }
+
+        /// <summary>Share-read so the log can be analysed while the game is still running. Null when missing.</summary>
+        private static string[] ReadLines(string path)
+        {
+            if (!File.Exists(path)) return null;
+            using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            using (var reader = new StreamReader(fs))
+                return reader.ReadToEnd().Split('\n');
         }
 
         private ManualGateInputs ReadManual()

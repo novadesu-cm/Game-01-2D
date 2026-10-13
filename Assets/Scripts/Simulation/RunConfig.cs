@@ -47,6 +47,9 @@ namespace GotA.Simulation
         /// <summary>On Timeout the final Pot is floor(Pot * this).</summary>
         public float TimeoutPotMultiplier = 0.5f;
 
+        /// <summary>P-06: measure D-08 knockback per hit. Never changes the simulation result.</summary>
+        public bool LogHits = true;
+
         public int FighterUnitId = 1;
         public int FirstEnemyUnitId = 101;
 

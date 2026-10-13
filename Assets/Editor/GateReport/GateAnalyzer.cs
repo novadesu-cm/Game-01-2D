@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
@@ -51,11 +51,16 @@ namespace GotA.EditorTools
         public int DefeatCount;
 
         // ---- G1 ----
-        public int HammerRuns, DaggersRuns;
-        public double HammerAvgPush, DaggersAvgPush;     // pooled: sum(push_total) / sum(hits)
+        public int HammerRuns, DaggersRuns, FistsRuns;   // from run rows (build_weapon)
+        public double HammerAvgPush, DaggersAvgPush;     // D-08 kb_distance per Fighter hit, pooled over hit rows
         public double HammerMeanOfRuns, DaggersMeanOfRuns;
+        public int HammerHitRows, DaggersHitRows;        // Fighter hit rows used
+        public int EnemyHitRowsExcluded;                 // attacker is not the Fighter
         public double G1Ratio;                           // +Infinity when Daggers = 0 and Hammer > 0
         public GateStatus G1;
+
+        // ---- G1b (D-09): RingOut count per weapon per run, Fighter hits only (info, no threshold) ----
+        public double HammerRingOutsPerRun, DaggersRingOutsPerRun, FistsRingOutsPerRun;
 
         // ---- G3 ----
         public int DecisionCount;
@@ -110,6 +115,9 @@ namespace GotA.EditorTools
                           " runs, mean of runs " + Fmt(DaggersMeanOfRuns, DaggersRuns > 0) + ")");
             sb.AppendLine("      Ratio        : " + (G1 == GateStatus.NoData ? "n/a"
                           : double.IsInfinity(G1Ratio) ? "infinite (Daggers = 0)" : G1Ratio.ToString("0.00", ci) + " x"));
+            sb.AppendLine("      G1b RingOuts per run (Fighter hits): Hammer " + Fmt(HammerRingOutsPerRun, HammerRuns > 0) +
+                          ", Daggers " + Fmt(DaggersRingOutsPerRun, DaggersRuns > 0) +
+                          ", Fists " + Fmt(FistsRingOutsPerRun, FistsRuns > 0));
             sb.AppendLine();
 
             sb.AppendLine("[" + Mark(G2) + "] G2  Understand why they lost  (>= " + (G2MinMatchRate * 100).ToString("0", ci) + "% match the log)  MANUAL");
@@ -165,47 +173,34 @@ namespace GotA.EditorTools
     }
 
     /// <summary>
-    /// Reads run_log.csv text (the P-06 format) and evaluates Prototype Gates G1, G3, G4.
-    /// Pure C#: no UnityEngine, no file access, read-only with respect to the log.
+    /// Reads the P-06 CSV text and evaluates Prototype Gates G1, G1b, G3, G4:
+    ///   run rows      (run_log.csv)      build, ring-outs per weapon, run duration
+    ///   hit rows      (hit_log.csv)      G1 uses only rows whose attacker is the Fighter (UnitID 1)
+    ///   decision rows (decision_log.csv) G3 decision time and continue rate, G4 decision time
+    /// Pure C#: no UnityEngine, no file access, read-only with respect to the logs.
     /// Columns are located by header name, so extra or reordered columns are fine.
     /// </summary>
     public static class GateAnalyzer
     {
-        private static readonly string[] RequiredColumns =
-        {
-            "build_weapon", "decision_times", "hits", "push_total", "run_duration_s", "end_reason"
-        };
+        public const string FighterAttackerId = "1";
 
-        public static GateReport Analyze(IEnumerable<string> csvLines, ManualGateInputs manual = null, string sourcePath = null)
+        private static readonly string[] RunColumns = { "build_weapon", "run_duration_s", "end_reason", "ringouts_by_weapon" };
+        private static readonly string[] HitColumns = { "seed", "attacker_id", "weapon", "kb_distance" };
+        private static readonly string[] DecisionColumns = { "wave", "choice", "decision_time_s" };
+
+        public static GateReport Analyze(IEnumerable<string> runLines, ManualGateInputs manual = null, string sourcePath = null,
+                                         IEnumerable<string> hitLines = null, IEnumerable<string> decisionLines = null)
         {
             var report = new GateReport { SourcePath = sourcePath, Manual = manual ?? new ManualGateInputs() };
             CultureInfo ci = CultureInfo.InvariantCulture;
 
-            Dictionary<string, int> col = null;
-            double hammerPush = 0, hammerHits = 0, daggersPush = 0, daggersHits = 0;
-            double hammerRunAvgSum = 0, daggersRunAvgSum = 0;
-            int hammerRunsWithHits = 0, daggersRunsWithHits = 0;
-            var decisionSeconds = new List<double>();
-            double fightSecondsTotal = 0, decisionSecondsTotal = 0;
-
-            foreach (string raw in csvLines)
+            // ---------------- run rows: runs per weapon, duration, ring-outs ----------------
+            double fightSecondsTotal = 0;
+            double hammerRingOuts = 0, daggersRingOuts = 0, fistsRingOuts = 0;
+            List<Dictionary<string, string>> runRows = ReadTable(runLines, RunColumns, report, "run_log.csv", out bool runHeaderSeen);
+            foreach (Dictionary<string, string> row in runRows)
             {
-                if (string.IsNullOrWhiteSpace(raw)) continue;
-                List<string> cells = SplitCsvLine(raw);
-
-                if (col == null)
-                {
-                    col = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-                    for (int i = 0; i < cells.Count; i++) col[cells[i].Trim()] = i;
-                    foreach (string need in RequiredColumns)
-                    {
-                        if (!col.ContainsKey(need))
-                            report.Warnings.Add("Missing column '" + need + "' - is this a run_log.csv from P-06?");
-                    }
-                    continue;
-                }
-
-                if (!TryGet(cells, col, "run_duration_s", out string durText) ||
+                if (!row.TryGetValue("run_duration_s", out string durText) ||
                     !double.TryParse(durText, NumberStyles.Float, ci, out double fightSeconds))
                 {
                     report.SkippedRows++;
@@ -215,69 +210,85 @@ namespace GotA.EditorTools
                 report.RunCount++;
                 fightSecondsTotal += fightSeconds;
 
-                if (TryGet(cells, col, "end_reason", out string reason) &&
+                if (row.TryGetValue("end_reason", out string reason) &&
                     string.Equals(reason, "Defeat", StringComparison.OrdinalIgnoreCase))
                     report.DefeatCount++;
 
-                // --- decisions: "W1:Continue:3.420;W2:Extract:1.100" ---
-                if (TryGet(cells, col, "decision_times", out string decisions) && decisions.Length > 0)
+                string weapon = row.TryGetValue("build_weapon", out string w) ? w : string.Empty;
+                int ringOuts = ParseRingOuts(row.TryGetValue("ringouts_by_weapon", out string ro) ? ro : null);
+                if (weapon.IndexOf("hammer", StringComparison.OrdinalIgnoreCase) >= 0) { report.HammerRuns++; hammerRingOuts += ringOuts; }
+                else if (weapon.IndexOf("dagger", StringComparison.OrdinalIgnoreCase) >= 0) { report.DaggersRuns++; daggersRingOuts += ringOuts; }
+                else if (weapon.IndexOf("fist", StringComparison.OrdinalIgnoreCase) >= 0) { report.FistsRuns++; fistsRingOuts += ringOuts; }
+            }
+
+            if (!runHeaderSeen) report.Warnings.Add("The run file is empty.");
+
+            report.HammerRingOutsPerRun = report.HammerRuns > 0 ? hammerRingOuts / report.HammerRuns : 0;
+            report.DaggersRingOutsPerRun = report.DaggersRuns > 0 ? daggersRingOuts / report.DaggersRuns : 0;
+            report.FistsRingOutsPerRun = report.FistsRuns > 0 ? fistsRingOuts / report.FistsRuns : 0;
+
+            // ---------------- hit rows: G1 (Fighter attacker only) ----------------
+            double hammerKb = 0, daggersKb = 0;
+            var hammerBySeed = new Dictionary<string, KeyValuePair<double, int>>();
+            var daggersBySeed = new Dictionary<string, KeyValuePair<double, int>>();
+            if (hitLines != null)
+            {
+                foreach (Dictionary<string, string> row in ReadTable(hitLines, HitColumns, report, "hit_log.csv", out _))
                 {
-                    foreach (string part in decisions.Split(';'))
+                    if (!row.TryGetValue("attacker_id", out string attacker) || attacker != FighterAttackerId)
                     {
-                        string[] f = part.Split(':');
-                        if (f.Length != 3 || !double.TryParse(f[2], NumberStyles.Float, ci, out double sec)) continue;
-
-                        decisionSeconds.Add(sec);
-                        decisionSecondsTotal += sec;
-
-                        if (string.Equals(f[0], "W1", StringComparison.OrdinalIgnoreCase))
-                        {
-                            report.Wave1Decisions++;
-                            if (string.Equals(f[1], "Continue", StringComparison.OrdinalIgnoreCase)) report.Wave1Continues++;
-                        }
+                        report.EnemyHitRowsExcluded++;
+                        continue;
                     }
-                }
 
-                // --- G1: push distance per weapon ---
-                if (TryGet(cells, col, "build_weapon", out string weapon))
-                {
+                    if (!row.TryGetValue("weapon", out string weapon) ||
+                        !row.TryGetValue("kb_distance", out string kbText) ||
+                        !double.TryParse(kbText, NumberStyles.Float, ci, out double kb))
+                        continue;
+
+                    string seed = row.TryGetValue("seed", out string s) ? s : string.Empty;
                     bool isHammer = weapon.IndexOf("hammer", StringComparison.OrdinalIgnoreCase) >= 0;
                     bool isDaggers = weapon.IndexOf("dagger", StringComparison.OrdinalIgnoreCase) >= 0;
-                    if (isHammer) report.HammerRuns++;
-                    if (isDaggers) report.DaggersRuns++;
 
-                    if ((isHammer || isDaggers) &&
-                        TryGet(cells, col, "push_total", out string pushText) &&
-                        TryGet(cells, col, "hits", out string hitsText) &&
-                        double.TryParse(pushText, NumberStyles.Float, ci, out double push) &&
-                        double.TryParse(hitsText, NumberStyles.Float, ci, out double hits))
+                    if (isHammer) { hammerKb += kb; report.HammerHitRows++; Accumulate(hammerBySeed, seed, kb); }
+                    else if (isDaggers) { daggersKb += kb; report.DaggersHitRows++; Accumulate(daggersBySeed, seed, kb); }
+                }
+            }
+
+            // ---------------- decision rows ----------------
+            var decisionSeconds = new List<double>();
+            double decisionSecondsTotal = 0;
+            if (decisionLines != null)
+            {
+                foreach (Dictionary<string, string> row in ReadTable(decisionLines, DecisionColumns, report, "decision_log.csv", out _))
+                {
+                    if (!row.TryGetValue("decision_time_s", out string secText) ||
+                        !double.TryParse(secText, NumberStyles.Float, ci, out double sec))
+                        continue;
+
+                    decisionSeconds.Add(sec);
+                    decisionSecondsTotal += sec;
+
+                    if (row.TryGetValue("wave", out string wave) && wave == "1")
                     {
-                        if (isHammer)
-                        {
-                            hammerPush += push; hammerHits += hits;
-                            if (hits > 0) { hammerRunAvgSum += push / hits; hammerRunsWithHits++; }
-                        }
-                        else
-                        {
-                            daggersPush += push; daggersHits += hits;
-                            if (hits > 0) { daggersRunAvgSum += push / hits; daggersRunsWithHits++; }
-                        }
+                        report.Wave1Decisions++;
+                        if (row.TryGetValue("choice", out string choice) &&
+                            string.Equals(choice, "Continue", StringComparison.OrdinalIgnoreCase))
+                            report.Wave1Continues++;
                     }
                 }
             }
 
-            if (col == null) report.Warnings.Add("The file is empty.");
-
             // ---------------- G1 ----------------
-            report.HammerAvgPush = hammerHits > 0 ? hammerPush / hammerHits : 0;
-            report.DaggersAvgPush = daggersHits > 0 ? daggersPush / daggersHits : 0;
-            report.HammerMeanOfRuns = hammerRunsWithHits > 0 ? hammerRunAvgSum / hammerRunsWithHits : 0;
-            report.DaggersMeanOfRuns = daggersRunsWithHits > 0 ? daggersRunAvgSum / daggersRunsWithHits : 0;
+            report.HammerAvgPush = report.HammerHitRows > 0 ? hammerKb / report.HammerHitRows : 0;
+            report.DaggersAvgPush = report.DaggersHitRows > 0 ? daggersKb / report.DaggersHitRows : 0;
+            report.HammerMeanOfRuns = MeanOfRuns(hammerBySeed);
+            report.DaggersMeanOfRuns = MeanOfRuns(daggersBySeed);
 
-            if (hammerHits <= 0 || daggersHits <= 0)
+            if (report.HammerHitRows <= 0 || report.DaggersHitRows <= 0)
             {
                 report.G1 = GateStatus.NoData;
-                report.Warnings.Add("G1 needs at least one Giant Hammer run and one Dual Daggers run that landed hits.");
+                report.Warnings.Add("G1 needs Fighter hit rows for both Giant Hammer and Dual Daggers (hit_log.csv).");
             }
             else
             {
@@ -337,9 +348,9 @@ namespace GotA.EditorTools
                 ? GateStatus.Pending
                 : (m.G5PlayAgainPlayers.Value >= GateReport.G5MinPlayAgainPlayers ? GateStatus.Pass : GateStatus.Fail);
 
-            if (report.HammerRuns > 0 || report.DaggersRuns > 0)
-                report.Warnings.Add("G1 push distance counts knockback of every unit (including hits the Gladiator takes from enemies), " +
-                                    "pooled per weapon as sum(push_total) / sum(hits).");
+            if (report.HammerHitRows > 0 || report.DaggersHitRows > 0)
+                report.Warnings.Add("G1 = D-08 kb_distance per hit, pooled per weapon over hit rows whose attacker is the Fighter (UnitID " +
+                                    FighterAttackerId + "); " + report.EnemyHitRowsExcluded + " enemy hit row(s) excluded.");
 
             return report;
         }
@@ -353,12 +364,60 @@ namespace GotA.EditorTools
             return n % 2 == 1 ? sorted[n / 2] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0;
         }
 
-        private static bool TryGet(List<string> cells, Dictionary<string, int> col, string name, out string value)
+        /// <summary>Parses CSV lines into header-keyed rows. The first non-blank line is the header.</summary>
+        private static List<Dictionary<string, string>> ReadTable(IEnumerable<string> lines, string[] required,
+            GateReport report, string label, out bool headerSeen)
         {
-            value = null;
-            if (!col.TryGetValue(name, out int index) || index >= cells.Count) return false;
-            value = cells[index].Trim();
-            return true;
+            var rows = new List<Dictionary<string, string>>();
+            headerSeen = false;
+            if (lines == null) return rows;
+
+            List<string> header = null;
+            foreach (string raw in lines)
+            {
+                if (string.IsNullOrWhiteSpace(raw)) continue;
+                List<string> cells = SplitCsvLine(raw);
+
+                if (header == null)
+                {
+                    header = new List<string>();
+                    foreach (string c in cells) header.Add(c.Trim());
+                    headerSeen = true;
+                    foreach (string need in required)
+                    {
+                        if (!header.Contains(need))
+                            report.Warnings.Add("Missing column '" + need + "' in " + label + " - is this a P-06 log?");
+                    }
+                    continue;
+                }
+
+                var row = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                for (int i = 0; i < header.Count && i < cells.Count; i++) row[header[i]] = cells[i].Trim();
+                rows.Add(row);
+            }
+            return rows;
+        }
+
+        /// <summary>"Giant Hammer:3" -> 3 (0 when blank or unreadable).</summary>
+        private static int ParseRingOuts(string cell)
+        {
+            if (string.IsNullOrEmpty(cell)) return 0;
+            int colon = cell.LastIndexOf(':');
+            return colon >= 0 && int.TryParse(cell.Substring(colon + 1), NumberStyles.Integer, CultureInfo.InvariantCulture, out int n) ? n : 0;
+        }
+
+        private static void Accumulate(Dictionary<string, KeyValuePair<double, int>> bySeed, string seed, double kb)
+        {
+            bySeed.TryGetValue(seed, out KeyValuePair<double, int> cur);
+            bySeed[seed] = new KeyValuePair<double, int>(cur.Key + kb, cur.Value + 1);
+        }
+
+        private static double MeanOfRuns(Dictionary<string, KeyValuePair<double, int>> bySeed)
+        {
+            if (bySeed.Count == 0) return 0;
+            double sum = 0;
+            foreach (KeyValuePair<double, int> v in bySeed.Values) sum += v.Key / v.Value;
+            return sum / bySeed.Count;
         }
 
         /// <summary>Splits one CSV line (RFC 4180 quotes; the P-06 writer never emits line breaks inside cells).</summary>

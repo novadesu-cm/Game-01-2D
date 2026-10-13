@@ -73,9 +73,11 @@ namespace GotA.Tests
         private static string Fingerprint(RunManager run)
         {
             SimUnit fighter = run.Sim.GetUnit(run.Config.FighterUnitId);
+            float kb = 0f;
+            foreach (HitLogEntry e in run.HitLog) kb += e.KbDistance;
             return run.EndReason + "|" + run.WaveNumber + "|" + run.TotalTicks + "|" + fighter.HP + "|" +
                    fighter.Position.x.ToString("R") + "," + fighter.Position.y.ToString("R") + "|" +
-                   run.TotalPushDistance.ToString("R") + "|" + run.TotalHits;
+                   kb.ToString("R") + "|" + run.HitLog.Count;
         }
 
         // ---- P-06 DoD ---------------------------------------------------------------------------
@@ -119,16 +121,25 @@ namespace GotA.Tests
         // ---- Metrics ---------------------------------------------------------------------------
 
         [Test]
-        public void PushDistance_IsTrackedAfterHits()
+        public void HitLog_HasOneEntryPerHit_WithBothTeams_AndAscendingRunTicks()
         {
             RunManager run = PlayRun(MakeSpecSetup(), MakeWeapon("Giant Hammer", 24, 2.0f, 0.60f, 9.0f, 1.5f), null, 5);
-            Assert.Greater(run.TotalHits, 0);
-            Assert.Greater(run.TotalPushDistance, 0f);
-            Assert.AreEqual(run.TotalPushDistance / run.TotalHits, run.AveragePushDistance, 1e-4f);
+            Assert.Greater(run.HitLog.Count, 0);
+
+            bool fighterHit = false, enemyHit = false;
+            foreach (HitLogEntry e in run.HitLog)
+            {
+                if (e.AttackerId == run.Config.FighterUnitId) fighterHit = true; else enemyHit = true;
+                Assert.GreaterOrEqual(e.KbDistance, 0f);
+                Assert.GreaterOrEqual(e.RunTick, 1);
+                Assert.LessOrEqual(e.RunTick, run.TotalTicks);
+            }
+            Assert.IsTrue(fighterHit, "Fighter hits are logged");
+            Assert.IsTrue(enemyHit, "enemy hits are logged too (excluded only from weapon stats)");
         }
 
         [Test]
-        public void Recorder_ComputesDecisionTimeContinueRateAndCause()
+        public void Recorder_BuildsHitRows_RunRow_AndDecisionRows()
         {
             RunSetupSO setup = MakeSpecSetup();
             WeaponConfigSO hammer = MakeWeapon("Giant Hammer", 24, 2.0f, 0.60f, 9.0f, 1.5f);
@@ -141,30 +152,40 @@ namespace GotA.Tests
             recorder.EndDecision(false, 21f);    // Extract after 1.0 s
             recorder.EndDecision(true, 99f);     // no open decision: ignored
 
-            var summary = new RunSummary { Reason = run.EndReason, FinalPot = run.FinalPot, CauseLine = "Killed by Grunt in Wave 2." };
+            var summary = new RunSummary { Reason = run.EndReason, FinalPot = run.FinalPot };
             RunLogRecord rec = recorder.Finish(run, summary, 90);
 
             Assert.AreEqual(9, rec.Seed);
-            Assert.AreEqual(4.5f, rec.DecisionSecondsTotal, 1e-4f);
-            Assert.AreEqual(0.5f, rec.ContinueRate, 1e-4f);
-            Assert.AreEqual("Killed by Grunt in Wave 2.", rec.CauseOfDeath);
-            Assert.AreEqual(run.AveragePushDistance, rec.AveragePushDistance, 1e-5f);
             Assert.AreEqual(90, rec.BestPot);
+            Assert.AreEqual(2, rec.Decisions.Count);
+            Assert.AreEqual(run.HitLog.Count, rec.Hits.Count, "one row per hit");
+
+            foreach (HitRow h in rec.Hits)
+                Assert.AreEqual(h.AttackerId == run.Config.FighterUnitId ? "Giant Hammer" : "Enemy", h.Weapon);
+
+            string[] decisionRows = { RunLogCsv.ToDecisionRow(9, rec.Decisions[0]), RunLogCsv.ToDecisionRow(9, rec.Decisions[1]) };
+            Assert.AreEqual("9,1,Continue,3.500", decisionRows[0]);
+            Assert.AreEqual("9,2,Extract,1.000", decisionRows[1]);
         }
 
         [Test]
-        public void Recorder_NoDecisions_ContinueRateIsBlankInCsv()
+        public void Recorder_RunRow_HasDeathCauseLastAttackerAndRingOutCount()
         {
             RunSetupSO setup = MakeSpecSetup();
-            setup.fighterStats.maxHP = 1; // dies in wave 1, never reaches a decision
+            setup.fighterStats.maxHP = 1; // dies in wave 1
             RunManager run = PlayRun(setup, MakeWeapon("Fists", 8, 1.0f, 0.20f, 3.0f, 1.1f), null, 3);
 
-            var recorder = new RunLogRecorder(3, "Fists", "None");
-            RunLogRecord rec = recorder.Finish(run, new RunSummary { CauseLine = "x" }, 0);
+            RunLogRecord rec = new RunLogRecorder(3, "Fists", "None").Finish(run, new RunSummary(), 0);
+            SimUnit fighter = run.Sim.GetUnit(run.Config.FighterUnitId);
 
-            Assert.IsTrue(float.IsNaN(rec.ContinueRate));
+            Assert.AreEqual(HitTargetDeath.HP, rec.FighterDeath);
+            Assert.AreEqual(fighter.LastAttackerId, rec.LastAttackerId);
+            Assert.GreaterOrEqual(rec.LastAttackerId, 101);
+
             string[] cells = RunLogCsv.ToRow(rec).Split(',');
-            Assert.AreEqual(string.Empty, cells[System.Array.IndexOf(RunLogCsv.Columns, "continue_rate")]);
+            Assert.AreEqual("HP", cells[System.Array.IndexOf(RunLogCsv.Columns, "death_cause")]);
+            Assert.AreEqual(rec.LastAttackerId.ToString(), cells[System.Array.IndexOf(RunLogCsv.Columns, "last_attacker_id")]);
+            StringAssert.StartsWith("Fists:", cells[System.Array.IndexOf(RunLogCsv.Columns, "ringouts_by_weapon")]);
         }
 
         // ---- CSV file ---------------------------------------------------------------------------
@@ -172,9 +193,19 @@ namespace GotA.Tests
         [Test]
         public void Csv_HasAllRequiredColumns()
         {
-            string header = RunLogCsv.Header();
-            foreach (string required in new[] { "seed", "decision_time_total_s", "continue_rate", "cause_of_death", "avg_push_distance" })
-                StringAssert.Contains(required, header);
+            foreach (string required in new[] { "seed", "build_weapon", "build_trait", "wave_results", "death_cause",
+                                                "last_attacker_id", "ringouts_by_weapon", "run_duration_s", "final_pot", "best_pot" })
+                StringAssert.Contains(required, RunLogCsv.Header());
+
+            Assert.AreEqual("seed,tick,attacker_id,target_id,weapon,damage,kb_distance,target_died", RunLogCsv.HitHeader());
+            Assert.AreEqual("seed,wave,choice,decision_time_s", RunLogCsv.DecisionHeader());
+        }
+
+        [Test]
+        public void Csv_HitRow_FormatsAllFields()
+        {
+            var hit = new HitRow(120, 1, 101, "Giant Hammer", 24, 2.1964f, HitTargetDeath.RingOut);
+            Assert.AreEqual("42,120,1,101,Giant Hammer,24,2.196,RingOut", RunLogCsv.ToHitRow(42, hit));
         }
 
         [Test]
@@ -193,15 +224,19 @@ namespace GotA.Tests
             WeaponConfigSO fists = MakeWeapon("Fists", 8, 1.0f, 0.20f, 3.0f, 1.1f);
             string dir = Path.Combine(Path.GetTempPath(), "gota_p06_" + System.Guid.NewGuid().ToString("N"));
             string path = Path.Combine(dir, "sub", "run_log.csv");
+            string hitPath = Path.Combine(dir, "sub", "hit_log.csv");
 
             try
             {
+                int hitRows = 0;
                 foreach (int seed in new[] { 111, 222 })
                 {
                     RunManager run = PlayRun(setup, fists, null, seed);
-                    RunLogRecord rec = new RunLogRecorder(seed, "Fists", "None")
-                        .Finish(run, new RunSummary { Reason = run.EndReason, CauseLine = "Cause, with comma" }, 0);
+                    RunLogRecord rec = new RunLogRecorder(seed, "Fists", "Trait, with comma")
+                        .Finish(run, new RunSummary { Reason = run.EndReason }, 0);
                     RunLogCsv.Append(path, rec);
+                    RunLogCsv.AppendHits(hitPath, rec);
+                    hitRows += rec.Hits.Count;
                 }
 
                 string[] lines = File.ReadAllLines(path);
@@ -209,7 +244,12 @@ namespace GotA.Tests
                 Assert.AreEqual(RunLogCsv.Header(), lines[0]);
                 StringAssert.StartsWith("111,", lines[1]);
                 StringAssert.StartsWith("222,", lines[2]);
-                StringAssert.Contains("\"Cause, with comma\"", lines[1]);
+                StringAssert.Contains("\"Trait, with comma\"", lines[1]);
+
+                string[] hitLines = File.ReadAllLines(hitPath);
+                Assert.AreEqual(1 + hitRows, hitLines.Length, "hit header once + one row per hit");
+                Assert.AreEqual(RunLogCsv.HitHeader(), hitLines[0]);
+                StringAssert.StartsWith("111,", hitLines[1]);
             }
             finally
             {

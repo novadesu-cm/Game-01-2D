@@ -74,7 +74,6 @@ namespace GotA.Simulation
             int actualDamage = Math.Min(finalDamage, defender.HP);
             defender.HP -= actualDamage;
             defender.LastAttackerId = attacker.UnitId;
-            defender.HitsTaken++; // P-06 telemetry
 
             // 7. Lifesteal: only if A.HP > 0
             int heal = 0;
@@ -95,6 +94,9 @@ namespace GotA.Simulation
             // 9. D.StaggerTimer = max(D.StaggerTimer, 0.1 + 0.04 * Impulse)
             float stagger = rules.StaggerBase + rules.StaggerPerImpulse * impulse;
             defender.StaggerTimer = MathF.Max(defender.StaggerTimer, stagger);
+
+            // P-06 / D-08: measurement-only record of this hit (reads values, changes no state).
+            sim.NotifyHit(attacker, defender, actualDamage, dir, impulse);
 
             return new HitResult(finalDamage, actualDamage, heal, impulse, stagger, defender.HP <= 0);
         }

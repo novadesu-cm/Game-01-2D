@@ -54,6 +54,7 @@ namespace GotA.Simulation
     {
         private readonly RunConfig _config;
         private readonly List<WaveResult> _results = new List<WaveResult>();
+        private readonly List<HitLogEntry> _hitLog = new List<HitLogEntry>();
         private ArenaSim _sim;
         private int _fighterHp;
 
@@ -97,14 +98,11 @@ namespace GotA.Simulation
 
         public IReadOnlyList<WaveResult> WaveResults => _results;
 
-        /// <summary>P-06 telemetry: knockback displacement of all units over all finished waves.</summary>
-        public float TotalPushDistance { get; private set; }
-
-        /// <summary>P-06 telemetry: hits landed (either team) over all finished waves.</summary>
-        public int TotalHits { get; private set; }
-
-        /// <summary>P-06 telemetry: TotalPushDistance / TotalHits, 0 when nothing was hit.</summary>
-        public float AveragePushDistance => TotalHits > 0 ? TotalPushDistance / TotalHits : 0f;
+        /// <summary>
+        /// P-06 / D-08: one entry per hit of all finished waves (both teams), in the order the
+        /// 50-tick windows closed. Windows of the current wave appear once the wave has ended.
+        /// </summary>
+        public IReadOnlyList<HitLogEntry> HitLog => _hitLog;
 
         /// <summary>Begins the run: Wave 1, fighter at MaxHP.</summary>
         public void Start()
@@ -156,6 +154,7 @@ namespace GotA.Simulation
             FighterConfig f = _config.Fighter;
 
             _sim = new ArenaSim(_config.Arena, _config.HitRules, _config.AiRules);
+            _sim.MeasureKnockback = _config.LogHits;
 
             SimUnit fighter = _sim.AddUnit(_config.FighterUnitId, ArenaSim.FighterTeam,
                 f.SpawnPosition, f.Stats, f.Weapon, f.Trait);
@@ -176,10 +175,13 @@ namespace GotA.Simulation
             SimUnit fighter = _sim.GetUnit(_config.FighterUnitId);
             _fighterHp = Math.Max(0, fighter.HP);
 
-            for (int i = 0; i < _sim.Units.Count; i++)
+            int tickOffset = TotalTicks - WaveTicks; // ticks of the earlier waves
+            for (int i = 0; i < _sim.HitLog.Count; i++)
             {
-                TotalPushDistance += _sim.Units[i].KnockbackDistance;
-                TotalHits += _sim.Units[i].HitsTaken;
+                HitLogEntry e = _sim.HitLog[i];
+                e.WaveNumber = WaveNumber;
+                e.RunTick = tickOffset + e.WaveTick;
+                _hitLog.Add(e);
             }
 
             switch (outcome)
