@@ -14,10 +14,20 @@ namespace GotA.Simulation
         ThickSkin = 2
     }
 
+    /// <summary>AI states (spec section 4). No Retreat in the prototype.</summary>
+    public enum AiState
+    {
+        Idle = 0,
+        Frozen = 1,
+        Chase = 2,
+        Ready = 3,
+        Windup = 4,
+        Dead = 5
+    }
+
     /// <summary>
     /// Simulation body (position, velocity, collision radius, alive state) plus
-    /// the combat data needed by Hit Resolution (P-02). AI and combat state
-    /// machines are added by later tasks.
+    /// the combat and AI data used by Hit Resolution (P-02) and the AI/tick (P-03).
     /// </summary>
     public sealed class SimUnit
     {
@@ -48,6 +58,20 @@ namespace GotA.Simulation
         /// <summary>UnitId of the last attacker that hit this unit (0 = none).</summary>
         public int LastAttackerId;
 
+        // --- P-03 AI data ---
+        public float MoveSpeed;
+        public float AtkSpdMult = 1f;
+        public AiState State = AiState.Idle;
+        public float Cooldown;
+        public float WindupTimer;
+        public float RetargetTimer;
+
+        /// <summary>Current chase target (0 = none).</summary>
+        public int TargetId;
+
+        /// <summary>Target locked when the current Windup started (0 = none).</summary>
+        public int LockedTargetId;
+
         public SimUnit(int unitId, int team, SimVec2 position, float bodyRadius)
         {
             UnitId = unitId;
@@ -58,5 +82,11 @@ namespace GotA.Simulation
             IsAlive = true;
             DeathCause = DeathCause.None;
         }
+
+        /// <summary>EffInterval = AttackInterval / AtkSpdMult.</summary>
+        public float EffInterval => Weapon.AttackInterval / AtkSpdMult;
+
+        /// <summary>EffWindup = Windup / AtkSpdMult.</summary>
+        public float EffWindup => Weapon.Windup / AtkSpdMult;
     }
 }
