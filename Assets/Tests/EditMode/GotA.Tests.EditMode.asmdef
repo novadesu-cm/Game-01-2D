@@ -3,6 +3,7 @@
     "rootNamespace": "GotA.Tests",
     "references": [
         "GotA.Simulation",
+        "GotA.Client",
         "UnityEngine.TestRunner",
         "UnityEditor.TestRunner"
     ],

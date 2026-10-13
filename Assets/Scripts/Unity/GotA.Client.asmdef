@@ -1,0 +1,17 @@
+{
+    "name": "GotA.Client",
+    "rootNamespace": "GotA.Client",
+    "references": [
+        "GotA.Simulation",
+        "UnityEngine.UI"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
