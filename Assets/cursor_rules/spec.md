@@ -1,5 +1,5 @@
 # God of the Arena — Prototype Spec (for code)
-Source: Prototype GDD v1.0 + GDD v2.1. If this file conflicts with the GDD, the GDD wins. All numbers are "pending test" values stored in ScriptableObjects.
+Source: Prototype GDD v1.0. If this file conflicts with the GDD, the GDD wins. All numbers are "pending test" values stored in ScriptableObjects.
 
 ## 0. Prototype loop
 Build select (1 Weapon + 1 Trait, free choice, no budget) → Wave 1 → Extract/Continue → Wave 2 → Extract/Continue → Wave 3 → Result → Play again.
@@ -91,6 +91,9 @@ D-03: each enemy spawn gets seeded offset ±0.3 u (System.Random(seed)); log see
 ## 7. Debug log (P-06) — CSV per run
 seed, build, wave results, decision time per Extract/Continue, choice, cause of death (RingOut/HP + last attacker), knockback distances per weapon, run duration, Pot, Best Pot.
 Batch mode: 20 seeds per build to confirm outcomes are not all identical.
+- Knockback distance (D-08): measurement-only KbVel per hit; KbVel += dir*impulse, each tick KbVel *= 1/(1+4*0.02), add |KbVel|*0.02, for 50 ticks or until the target dies. KbVel never affects Pos/Vel.
+- G1 = sanity check only; G1b = RingOut count per weapon per run (D-09).
+- Decision time = from Extract/Continue overlay shown to button press (excludes transitions). Continue rate is computed from decision rows, not stored.
 
 ## 8. Task order
 P-01a data+sim skeleton → P-02 HitResolver → P-01b movement/knockback/collision → P-01c ring-out+determinism+debug view → P-03 AI+tick → P-04 waves/Pot/Extract/Timeout → P-05 UI → P-06 log → P-07 playtest.
