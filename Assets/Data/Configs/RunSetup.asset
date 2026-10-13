@@ -1,0 +1,50 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: fe57b59c2d1a4ff4d841378675bb03ad, type: 3}
+  m_Name: RunSetup
+  m_EditorClassIdentifier: GotA.Client::GotA.Client.RunSetupSO
+  arenaRadius: 6
+  fixedDt: 0.02
+  drag: 4
+  waveTimeLimitSeconds: 60
+  timeoutPotMultiplier: 0.5
+  fighterStats:
+    maxHP: 120
+    moveSpeed: 3
+    dmgMult: 1
+    atkSpdMult: 1
+    kbMult: 1
+    kbResist: 0.1
+    bodyRadius: 0.4
+  fighterSpawn: {x: -3, y: 0}
+  waves:
+  - potReward: 30
+    enemies:
+    - enemy: {fileID: 11400000, guid: 7d07d276d1fe6cd45bfab4460a7a3996, type: 2}
+      position: {x: 3, y: 1}
+    - enemy: {fileID: 11400000, guid: 7d07d276d1fe6cd45bfab4460a7a3996, type: 2}
+      position: {x: 3, y: -1}
+  - potReward: 50
+    enemies:
+    - enemy: {fileID: 11400000, guid: 7d07d276d1fe6cd45bfab4460a7a3996, type: 2}
+      position: {x: 2.5, y: 1}
+    - enemy: {fileID: 11400000, guid: f55577f61b656cd4ab88a6b7bf19e7f0, type: 2}
+      position: {x: 3.5, y: -1}
+  - potReward: 100
+    enemies:
+    - enemy: {fileID: 11400000, guid: 7d07d276d1fe6cd45bfab4460a7a3996, type: 2}
+      position: {x: 2.5, y: 1.5}
+    - enemy: {fileID: 11400000, guid: 7d07d276d1fe6cd45bfab4460a7a3996, type: 2}
+      position: {x: 2.5, y: -1.5}
+    - enemy: {fileID: 11400000, guid: f55577f61b656cd4ab88a6b7bf19e7f0, type: 2}
+      position: {x: 3.5, y: 0}
+  spawnJitter: 0.3

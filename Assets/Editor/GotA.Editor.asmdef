@@ -3,7 +3,9 @@
     "rootNamespace": "GotA.EditorTools",
     "references": [
         "GotA.Simulation",
-        "GotA.Client"
+        "GotA.Client",
+        "Unity.InputSystem",
+        "UnityEngine.UI"
     ],
     "includePlatforms": [
         "Editor"

@@ -1,0 +1,24 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 778b77d2911a50c42b2c3cea4c399a97, type: 3}
+  m_Name: Enemy_Grunt
+  m_EditorClassIdentifier: GotA.Client::GotA.Client.EnemyConfigSO
+  displayName: Grunt
+  stats:
+    maxHP: 40
+    moveSpeed: 2.4
+    dmgMult: 1
+    atkSpdMult: 1
+    kbMult: 1
+    kbResist: 0
+    bodyRadius: 0.4
+  weapon: {fileID: 11400000, guid: d411a13c6a34035439d00efafd5117fd, type: 2}
